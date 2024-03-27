@@ -1,0 +1,97 @@
+trigger:
+- main
+
+pool:
+      name: Fronture Onprem
+      demands:
+      - agent.name -equals Faraz-DevOps
+
+variables:
+  phpVersion: 8.3
+
+steps:
+- script: |
+    sudo update-alternatives --set php /usr/bin/php$(phpVersion)
+    sudo update-alternatives --set phar /usr/bin/phar$(phpVersion)
+    sudo update-alternatives --set phpdbg /usr/bin/phpdbg$(phpVersion)
+    sudo update-alternatives --set php-cgi /usr/bin/php-cgi$(phpVersion)
+    sudo update-alternatives --set phar.phar /usr/bin/phar.phar$(phpVersion)
+    php -version
+  displayName: 'Use PHP version $(phpVersion)'
+
+- script: composer install --no-interaction --prefer-dist
+  displayName: 'composer install'
+
+- task: PowerShell@2
+  inputs:
+    targetType: 'inline'
+    script: |
+      # Specify the file paths
+      $envFilePath = "$(Build.SourcesDirectory)/.env"
+      $exampleEnvFilePath = "$(Build.SourcesDirectory)/.env.example"
+      
+      $envContent = Get-Content -Path $exampleEnvFilePath
+      Set-Content -Path $envFilePath -Value $envContent -Force
+      php artisan key:generate
+
+- task: CopyFiles@2
+  inputs:
+    SourceFolder: '$(Build.SourcesDirectory)/Public'
+    Contents: '**'
+    TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+    ArtifactName: 'drop'
+    publishLocation: 'Container'
+
+- task: DownloadBuildArtifacts@1
+  inputs:
+    buildType: 'current'
+    downloadType: 'single'
+    artifactName: 'drop'
+    downloadPath: '$(Build.ArtifactStagingDirectory)'
+
+- task: PowerShell@2
+  condition: false
+  inputs:
+    targetType: 'inline'
+    script: |
+      # Get the current location
+      Get-Location
+      
+      # Define the content to be written to the file
+      $fileContent = @"
+      <VirtualHost *:8383>
+          ServerName localhost
+          DocumentRoot "C:/agent-wf/1/s/public/"
+
+          <Directory "C:/agent-wf/1/s/">
+              Options Indexes FollowSymLinks
+              AllowOverride all
+              Require all granted
+          </Directory>
+      </VirtualHost>
+
+      Listen 8383
+      "@
+      
+      # Specify the file path
+      $filePath = "$(Build.ArtifactStagingDirectory)/laravel-apache.conf"
+      
+      # Write the content to the file, overwriting it if it exists
+      Set-Content -Path $filePath -Value $fileContent -Force
+      
+      Copy-Item -Path $filepath -Destination $(APACHE_ROOT_PATH)/conf/extra -Force
+      
+      #Added the .conf file to httpd.conf
+      $filePath2 = "$(APACHE_ROOT_PATH)/conf/httpd.conf"
+      $lineToAdd = "Include conf/extra/laravel-apache.conf"
+      
+      if ((Get-Content -Path $filePath2) -contains $lineToAdd) {
+          Write-Host "Line already exists"
+      } else {
+          Add-Content -Path $filePath2 -Value $lineToAdd
+          Write-Host "Line added successfully"
+      }
